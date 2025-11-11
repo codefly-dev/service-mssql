@@ -1,0 +1,4 @@
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[{{.TableName}}]') AND type in (N'U'))
+CREATE TABLE [dbo].[{{.TableName}}] (
+id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID()
+);

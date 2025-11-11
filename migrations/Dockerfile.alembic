@@ -1,0 +1,59 @@
+FROM python:3.12-slim
+
+# Prevent Python from writing bytecode
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install SQL Server client tools and build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    unixodbc \
+    unixodbc-dev \
+    tdsodbc \
+    freetds-bin \
+    freetds-dev \
+    gcc \
+    g++ \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser
+
+# Set up workspace with proper permissions
+RUN mkdir -p /workspace && chown -R appuser:appuser /workspace
+
+# Configure FreeTDS ODBC driver
+# tdsodbc package installs the driver, we just need to verify it's configured
+RUN odbcinst -q -d | grep -q FreeTDS || ( \
+    ARCH=$(dpkg-architecture -q DEB_HOST_MULTIARCH 2>/dev/null || uname -m | sed 's/x86_64/x86_64-linux-gnu/;s/aarch64/aarch64-linux-gnu/') && \
+    DRIVER_PATH=$(find /usr -name "libtdsodbc.so" 2>/dev/null | head -1) && \
+    SETUP_PATH=$(find /usr -name "libtdsS.so*" 2>/dev/null | head -1) && \
+    if [ -n "$DRIVER_PATH" ] && [ -n "$SETUP_PATH" ]; then \
+        echo "[FreeTDS]" >> /etc/odbcinst.ini && \
+        echo "Description=FreeTDS Driver for SQL Server" >> /etc/odbcinst.ini && \
+        echo "Driver=$DRIVER_PATH" >> /etc/odbcinst.ini && \
+        echo "Setup=$SETUP_PATH" >> /etc/odbcinst.ini && \
+        echo "FileUsage=1" >> /etc/odbcinst.ini; \
+    fi \
+    )
+
+# Install build tools and then packages
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    alembic==1.13.1 \
+    sqlalchemy==2.0.27 \
+    requests==2.31.0 \
+    python-dotenv==1.0.1 \
+    pyodbc==5.0.1
+
+WORKDIR /workspace
+
+# Add healthcheck (SQL Server doesn't have pg_isready equivalent, so we'll use a simple TCP check)
+# Note: netcat needs to be installed for healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends netcat-openbsd && rm -rf /var/lib/apt/lists/*
+HEALTHCHECK --interval=5s --timeout=5s --start-period=5s --retries=3 \
+    CMD nc -z localhost 1433 || exit 1
+
+# Switch to non-root user
+USER appuser
