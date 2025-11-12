@@ -1,11 +1,17 @@
-## Build multi-platform images
+## Build and push multi-platform images
 
-# Set up buildx if you haven't already
-```bash
-docker buildx create --use
-```
+### Prerequisites
+1. Make sure you're logged into Docker Hub with access to the `codeflydev` organization:
+   ```bash
+   docker login
+   ```
 
-# Build and push the multi-arch image for Microsoft SQL Server
+2. Set up buildx if you haven't already:
+   ```bash
+   docker buildx create --use
+   ```
+
+### Build and push the multi-arch image for Microsoft SQL Server
 
 ```bash 
 docker buildx build \
@@ -15,3 +21,5 @@ docker buildx build \
   --push \
   migrations/
 ```
+
+**Note:** Make sure you have push access to the `codeflydev` Docker Hub organization before running the push command.
