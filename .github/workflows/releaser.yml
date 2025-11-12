@@ -29,4 +29,5 @@ jobs:
         with:
           version: latest
           args: release --clean
-          github_token: ${{ secrets.GH_PAT }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
