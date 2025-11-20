@@ -29,7 +29,8 @@ jobs:
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         with:
           version: latest
           args: release --clean
-          github_token: ${{ secrets.GH_PAT }}
