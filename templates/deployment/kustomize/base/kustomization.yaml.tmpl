@@ -1,0 +1,7 @@
+resources:
+  - namespace.yaml
+  - stateful-set.yaml
+  - service.yaml
+{{- if .Deployment.Parameters.WithMigration }}
+  - job.yaml
+{{- end }}

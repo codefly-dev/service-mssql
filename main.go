@@ -52,6 +52,11 @@ var image = &resources.DockerImage{
 	Digest: "sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56",
 }
 
+type DeploymentTemplateParameters struct {
+	WithMigration bool
+	ManagedImage  string
+}
+
 type Service struct {
 	*services.Base
 
