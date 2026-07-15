@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codefly-dev/core/agents"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
+	"github.com/codefly-dev/core/wool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +34,7 @@ func TestCreateToRun(t *testing.T) {
 }
 
 func runTestWithFormat(t *testing.T, migrationFormat string) {
-	agents.LogToConsole()
+	wool.SetGlobalLogLevel(wool.DEBUG)
 	ctx := context.Background()
 
 	workspace := &resources.Workspace{Name: "test"}

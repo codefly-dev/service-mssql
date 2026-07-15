@@ -16,6 +16,7 @@ import (
 	"github.com/codefly-dev/core/agents/services"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	"github.com/codefly-dev/core/resources"
+	runnersbase "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/shared"
 )
 
@@ -45,7 +46,11 @@ const (
 	MigrationFormat = "migration-format"
 )
 
-var image = &resources.DockerImage{Name: "mcr.microsoft.com/mssql/server", Tag: "2022-latest"}
+var image = &resources.DockerImage{
+	Name:   "mcr.microsoft.com/mssql/server",
+	Tag:    "2022-CU25-ubuntu-22.04",
+	Digest: "sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56",
+}
 
 type Service struct {
 	*services.Base
@@ -67,14 +72,11 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	return &agentv0.AgentInformation{
-		RuntimeRequirements: []*agentv0.Runtime{},
-		Capabilities: []*agentv0.Capability{
-			{Type: agentv0.Capability_BUILDER},
-			{Type: agentv0.Capability_RUNTIME},
+	return services.Advertisement{
+		Backends: runnersbase.BackendSupport{
+			Docker: true,
 		},
-		Protocols: []*agentv0.Protocol{},
-		ConfigurationDetails: []*agentv0.ConfigurationValueDetail{
+		Config: []*agentv0.ConfigurationValueDetail{
 			{
 				Name: "mssql", Description: "microsoft sql server credentials",
 				Fields: []*agentv0.ConfigurationValueInformation{
@@ -84,7 +86,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 				}},
 		},
 		ReadMe: readme,
-	}, nil
+	}.Build(), nil
 }
 
 func NewService() *Service {
@@ -123,7 +125,7 @@ func (s *Service) createConnectionString(ctx context.Context, conf *basev0.Confi
 	if port == "" {
 		port = "1433"
 	}
-	
+
 	// Use DSN format for go-mssqldb driver
 	// The driver handles special characters in passwords, but we need to URL encode if using URL format
 	// For DSN format, special characters like ; and = need to be escaped or the value quoted
@@ -160,10 +162,11 @@ func (s *Service) CreateConnectionConfiguration(ctx context.Context, conf *basev
 }
 
 func main() {
-	agents.Register(
-		services.NewServiceAgent(agent.Of(resources.ServiceAgent), NewService()),
-		services.NewBuilderAgent(agent.Of(resources.RuntimeServiceAgent), NewBuilder()),
-		services.NewRuntimeAgent(agent.Of(resources.BuilderServiceAgent), NewRuntime()))
+	agents.Serve(agents.PluginRegistration{
+		Agent:   NewService(),
+		Runtime: NewRuntime(),
+		Builder: NewBuilder(),
+	})
 }
 
 //go:embed agent.codefly.yaml

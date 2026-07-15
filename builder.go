@@ -21,7 +21,10 @@ import (
 )
 
 type Builder struct {
+	services.BuilderServer
 	*Service
+
+	answers map[string]*agentv0.Answer
 }
 
 func NewBuilder() *Builder {
@@ -53,13 +56,6 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
 		if err != nil {
 			return nil, err
-		}
-		if req.CreationMode.Communicate {
-			// communication on CreateResponse
-			err = s.Communication.Register(ctx, communicate.New[builderv0.CreateRequest](s.createCommunicate()))
-			if err != nil {
-				return s.Builder.LoadError(err)
-			}
 		}
 		return s.Builder.LoadResponse()
 	}
@@ -191,7 +187,11 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return s.Builder.DeployResponse()
 	}
 
-	cm, err := services.EnvsAsConfigMapData(s.EnvironmentVariables.Configurations()...)
+	confs, err := s.EnvironmentVariables.Configurations()
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+	cm, err := services.EnvsAsConfigMapData(confs...)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}
@@ -232,7 +232,7 @@ func (s *Builder) Options() []*agentv0.Question {
 			Name:        MigrationFormat,
 			Message:     "Choose migration format",
 			Description: "Select the database migration tool you prefer",
-		}, "gomigrate",
+		},
 			&agentv0.Message{
 				Name:        "gomigrate",
 				Message:     "Golang Migrate",
@@ -246,8 +246,14 @@ func (s *Builder) Options() []*agentv0.Question {
 	}
 }
 
-func (s *Builder) createCommunicate() *communicate.Sequence {
-	return communicate.NewSequence(s.Options()...)
+func (s *Builder) Communicate(stream builderv0.Builder_CommunicateServer) error {
+	asker := communicate.NewQuestionAsker(stream)
+	answers, err := asker.RunSequence(s.Options())
+	if err != nil {
+		return err
+	}
+	s.answers = answers
+	return nil
 }
 
 type create struct {
@@ -260,20 +266,17 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	defer s.Wool.Catch()
 
 	if s.Builder.CreationMode.Communicate {
-		session, err := s.Communication.Done(ctx, communicate.Channel[builderv0.CreateRequest]())
+		var err error
+		s.Settings.DatabaseName, err = communicate.InputString(s.answers, DatabaseName)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}
 
-		s.Settings.DatabaseName, err = session.GetInputString(DatabaseName)
+		choice, err := communicate.Choice(s.answers, MigrationFormat)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}
-
-		s.Settings.MigrationFormat, err = session.GetChoice(MigrationFormat)
-		if err != nil {
-			return s.Builder.CreateError(err)
-		}
+		s.Settings.MigrationFormat = choice.Option
 	} else {
 		options := s.Options()
 		var err error
@@ -290,10 +293,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 			}
 		}
 		if s.Settings.MigrationFormat == "" {
-			s.Settings.MigrationFormat, err = communicate.GetDefaultChoice(options, MigrationFormat)
-			if err != nil {
-				return s.Builder.CreateError(err)
-			}
+			s.Settings.MigrationFormat = "gomigrate"
 		}
 	}
 
@@ -306,9 +306,9 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	var migrationTemplate *services.TemplateWrapper
 	switch s.Settings.MigrationFormat {
 	case "gomigrate":
-		migrationTemplate = services.WithDir(gomigrateFS, "templates/migrations/gomigrate").WithDestination(s.Local("migrations"))
+		migrationTemplate = services.WithTemplate(gomigrateFS, "migrations/gomigrate", "migrations").WithDestination("%s", s.Local("migrations"))
 	case "alembic":
-		migrationTemplate = services.WithDir(alembicFS, "templates/migrations/alembic").WithDestination(s.Local("migrations"))
+		migrationTemplate = services.WithTemplate(alembicFS, "migrations/alembic", "migrations").WithDestination("%s", s.Local("migrations"))
 	default:
 		return s.Builder.CreateError(fmt.Errorf("invalid migration format: %s", s.Settings.MigrationFormat))
 	}

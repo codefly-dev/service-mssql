@@ -11,7 +11,7 @@ import (
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	"github.com/codefly-dev/core/resources"
-	runners "github.com/codefly-dev/core/runners/base"
+	dockerrun "github.com/codefly-dev/core/runners/dockerrun"
 	"github.com/codefly-dev/core/wool"
 )
 
@@ -21,6 +21,11 @@ type Alembic struct {
 
 	containerConnection string // For use inside Docker
 	nativeConnection    string // For use on host
+}
+
+var alembicImage = &resources.DockerImage{
+	Name:   "codeflydev/mssql-alembic",
+	Digest: "sha256:d0a5e79de5c88d2bdbf29db3b4b2352a7b612aa0ce29ac13574d77941381f03c",
 }
 
 func NewAlembic(ctx context.Context, config Config) (*Alembic, error) {
@@ -35,7 +40,7 @@ func convertDSNToSQLAlchemyURL(dsn string) (string, error) {
 	// Parse DSN format
 	var server, userID, password, database string
 	var encrypt string
-	
+
 	parts := strings.Split(dsn, ";")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -51,11 +56,11 @@ func convertDSNToSQLAlchemyURL(dsn string) (string, error) {
 			encrypt = strings.TrimPrefix(part, "encrypt=")
 		}
 	}
-	
+
 	if server == "" || userID == "" || password == "" || database == "" {
 		return "", fmt.Errorf("invalid DSN format: missing required fields")
 	}
-	
+
 	// Parse server (host,port)
 	host := server
 	port := "1433"
@@ -64,16 +69,16 @@ func convertDSNToSQLAlchemyURL(dsn string) (string, error) {
 		host = parts[0]
 		port = parts[1]
 	}
-	
+
 	// URL encode password and user (pymssql handles special characters in URLs)
 	encodedUser := url.QueryEscape(userID)
 	encodedPassword := url.QueryEscape(password)
 	encodedDatabase := url.QueryEscape(database)
-	
+
 	// Build SQLAlchemy URL for pyodbc driver (more reliable, better support)
 	// Format: mssql+pyodbc://user:password@host:port/database?driver=ODBC+Driver+17+for+SQL+Server
 	sqlalchemyURL := fmt.Sprintf("mssql+pyodbc://%s:%s@%s:%s/%s", encodedUser, encodedPassword, host, port, encodedDatabase)
-	
+
 	// Add driver and connection parameters
 	// Use FreeTDS driver which works on all architectures
 	params := []string{"driver=FreeTDS"}
@@ -83,11 +88,11 @@ func convertDSNToSQLAlchemyURL(dsn string) (string, error) {
 	} else {
 		params = append(params, "TDS_Version=8.0")
 	}
-	
+
 	if len(params) > 0 {
 		sqlalchemyURL += "?" + strings.Join(params, "&")
 	}
-	
+
 	return sqlalchemyURL, nil
 }
 
@@ -118,7 +123,7 @@ func (a *Alembic) Init(ctx context.Context, configurations []*basev0.Configurati
 	return nil
 }
 
-func (a *Alembic) getRunner(ctx context.Context) (*runners.DockerEnvironment, error) {
+func (a *Alembic) getRunner(ctx context.Context) (*dockerrun.DockerEnvironment, error) {
 	name := fmt.Sprintf("alembic-%d", time.Now().UnixMilli())
 
 	// Debug directory contents
@@ -137,14 +142,17 @@ func (a *Alembic) getRunner(ctx context.Context) (*runners.DockerEnvironment, er
 
 	// Use SQL Server-specific image for Microsoft SQL Server support
 	// Users can override with AlembicImageOverride setting if needed
-	image := &resources.DockerImage{Name: "codeflydev/mssql-alembic", Tag: "latest"}
+	// The publisher currently exposes only a floating `latest` tag. Pin the
+	// resolved manifest digest so migration behavior cannot change silently.
+	image := alembicImage
 	if a.config.ImageOverride != nil {
-		image, err = resources.ParseDockerImage(*a.config.ImageOverride)
+		var err error
+		image, err = resources.ParsePinnedImage(*a.config.ImageOverride)
 		if err != nil {
 			return nil, a.w.Wrapf(err, "cannot parse alembic image override")
 		}
 	}
-	runner, err := runners.NewDockerEnvironment(ctx, image, a.config.MigrationDir, name)
+	runner, err := dockerrun.NewDockerEnvironment(ctx, image, a.config.MigrationDir, name)
 	if err != nil {
 		return nil, a.w.Wrapf(err, "cannot create docker environment")
 	}
@@ -162,7 +170,7 @@ func (a *Alembic) getRunner(ctx context.Context) (*runners.DockerEnvironment, er
 	if err != nil {
 		return nil, a.w.Wrapf(err, "cannot convert connection string to SQLAlchemy URL")
 	}
-	
+
 	// Set environment variables
 	runner.WithEnvironmentVariables(ctx,
 		resources.Env("DATABASE_URL", sqlalchemyURL),

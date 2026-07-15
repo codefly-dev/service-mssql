@@ -16,10 +16,9 @@ import (
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/wool"
 
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/resources"
-	runners "github.com/codefly-dev/core/runners/base"
+	dockerrun "github.com/codefly-dev/core/runners/dockerrun"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/microsoft/go-mssqldb"
 
@@ -27,10 +26,11 @@ import (
 )
 
 type Runtime struct {
+	services.RuntimeServer
 	*Service
 
 	// internal
-	runnerEnvironment *runners.DockerEnvironment
+	runnerEnvironment *dockerrun.DockerEnvironment
 
 	sqlServerPort    uint16
 	migrationManager migrations.Manager
@@ -145,13 +145,13 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	// Docker
 	runnerImage := image
 	if s.Settings.ImageOverride != nil {
-		runnerImage, err = resources.ParseDockerImage(*s.Settings.ImageOverride)
+		runnerImage, err = resources.ParsePinnedImage(*s.Settings.ImageOverride)
 		if err != nil {
-			return s.Runtime.InitError(err)
+			return s.Runtime.InitErrorf(err, "invalid image override")
 		}
 	}
 
-	runner, err := runners.NewDockerHeadlessEnvironment(ctx, runnerImage, s.UniqueWithWorkspace())
+	runner, err := dockerrun.NewDockerHeadlessEnvironment(ctx, runnerImage, s.UniqueWithWorkspace())
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -185,7 +185,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		}
 
 		if s.Settings.MigrationVersionDirOverride != nil {
-			versionOverride := s.Local(*s.Settings.MigrationVersionDirOverride)
+			versionOverride := s.Local("%s", *s.Settings.MigrationVersionDirOverride)
 			empty, err := shared.CheckEmptyDirectory(ctx, versionOverride)
 			if err != nil {
 				return s.Runtime.InitError(err)
@@ -286,7 +286,7 @@ func (s *Runtime) createDatabaseIfNotExists(ctx context.Context) error {
 	// Connect to master database to create the target database
 	// Parse connection string and replace database name with master
 	masterConn := strings.ReplaceAll(s.connection, fmt.Sprintf("database=%s", s.DatabaseName), "database=master")
-	
+
 	db, err := sql.Open("sqlserver", masterConn)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot open connection to master database")
@@ -372,10 +372,6 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 
 	s.Wool.Debug("nothing to stop: keep environment alive")
 
-	err := s.Base.Stop()
-	if err != nil {
-		return s.Runtime.StopError(err)
-	}
 	return s.Runtime.StopResponse()
 }
 
@@ -398,10 +394,6 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 
 func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
 	return s.Runtime.TestResponse()
-}
-
-func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv0.InformationRequest, error) {
-	return s.Base.Communicate(ctx, req)
 }
 
 /* Details
