@@ -69,6 +69,33 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	return s.Builder.SyncResponse()
 }
 
+func (s *Builder) managedRuntimeImage() (*resources.DockerImage, error) {
+	if s.Settings != nil && s.Settings.ImageOverride != nil {
+		return resources.ParsePinnedImage(*s.Settings.ImageOverride)
+	}
+	return image, nil
+}
+
+func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*builderv0.AuditResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	managed, err := s.managedRuntimeImage()
+	if err != nil {
+		return s.Builder.AuditError(err)
+	}
+	return s.Builder.AuditContainer(ctx, req, managed.FullName())
+}
+
+func (s *Builder) SBOM(ctx context.Context, _ *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	managed, err := s.managedRuntimeImage()
+	if err != nil {
+		return s.Builder.SBOMError(err)
+	}
+	return s.Builder.SBOMContainer(ctx, managed.FullName())
+}
+
 type DockerTemplating struct {
 	ConnectionStringKeyHolder string
 }
