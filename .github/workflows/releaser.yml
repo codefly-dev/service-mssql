@@ -6,31 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        with:
-          go-version: 1.21.4
-
-      - name: Pull required Docker images
-        run: |
-          docker pull codeflydev/mssql-alembic:latest
-
-      - name: test
-        run: go test -v ./...
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-        with:
-          version: latest
-          args: release --clean
+  release:
+    uses: codefly-dev/.github/.github/workflows/go-service-release.yml@main
+    with:
+      setup-run: docker pull codeflydev/mssql-alembic:latest
+    secrets: inherit
