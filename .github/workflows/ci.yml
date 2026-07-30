@@ -10,6 +10,30 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
+    permissions:
+      contents: read
     uses: codefly-dev/core/.github/workflows/go-service-ci.yml@main
+
+  test:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Runs the Kubernetes manifest-bundle conformance/boundary suite
+      # (AssertKustomizeTemplates -> AssertKubernetesManifestContract), the
+      # restricted-profile contract tests, and the Docker hardened-runtime test
+      # that proves SQL Server serves under the restricted securityContext.
+      # Docker is preinstalled on GitHub-hosted amd64 runners, where the
+      # linux/amd64 SQL Server image runs natively. The heavy end-to-end
+      # migration integration (TestCreateToRun) is exercised separately.
+      - name: Conformance and hardened-runtime tests
+        run: go test ./... -skip '^TestCreateToRun$'
