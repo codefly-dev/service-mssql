@@ -162,29 +162,65 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 
-	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
+	parameters := &DeploymentTemplateParameters{
+		WithMigration: s.WithMigration(),
+		ManagedImage:  image.FullName(),
+	}
+	var restrictedConfiguration *v0.Configuration
+	response, err := s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
 		Inputs: services.DeploymentInputs{
 			OwnConfiguration: true,
 		},
-		Parameters: DeploymentTemplateParameters{
-			WithMigration: s.WithMigration(),
-			ManagedImage:  image.FullName(),
-		},
+		Parameters: parameters,
 		Prepare: func(ctx context.Context, deployment *services.KustomizeDeploymentContext) error {
-			instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, req.GetNetworkMappings(), s.TcpEndpoint, resources.NewPublicNetworkAccess())
-			if err != nil {
-				return err
+			configuration, prepareErr := s.prepareDeployment(ctx, deployment, parameters)
+			if prepareErr != nil {
+				return prepareErr
 			}
-			configuration, err := s.CreateConnectionConfiguration(ctx, req.GetConfiguration(), instance, !s.Settings.WithoutSSL)
-			if err != nil {
-				return err
+			// A restricted render must not receive secret values, so the
+			// connection configuration is returned as a value-free reference on
+			// the response instead of being exported into the manifests.
+			if services.IsRestrictedOutputProfile(deployment.Profile) {
+				restrictedConfiguration = configuration
+				return nil
 			}
 			s.Wool.Debug("exporting configuration", wool.Field("conf", resources.MakeConfigurationSummary(configuration)))
 			return deployment.ExportConfiguration(ctx, configuration)
 		},
 	})
+	if err != nil ||
+		response.GetState().GetState() != builderv0.DeploymentStatus_SUCCESS ||
+		restrictedConfiguration == nil {
+		return response, err
+	}
+	response.Configuration = restrictedConfiguration
+	return response, nil
+}
+
+func (s *Builder) prepareDeployment(
+	ctx context.Context,
+	deployment *services.KustomizeDeploymentContext,
+	parameters *DeploymentTemplateParameters,
+) (*v0.Configuration, error) {
+	instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, deployment.Request.GetNetworkMappings(), s.TcpEndpoint, resources.NewPublicNetworkAccess())
+	if err != nil {
+		return nil, err
+	}
+	if services.IsRestrictedOutputProfile(deployment.Profile) {
+		passwordEnv := resources.ServiceSecretConfigurationKeyFromUnique(s.Unique(), "mssql", "MSSQL_PASSWORD")
+		passwordReference := deployment.Kubernetes.GetSecretReferences()[passwordEnv]
+		if passwordReference == nil {
+			return nil, fmt.Errorf("mssql requires a typed Kubernetes Secret reference for %s", passwordEnv)
+		}
+		if passwordReference.GetOptional() {
+			return nil, fmt.Errorf("mssql Secret reference must not be optional")
+		}
+		parameters.PasswordReference = passwordReference
+		return s.restrictedConnectionConfiguration(instance), nil
+	}
+	return s.CreateConnectionConfiguration(ctx, deployment.Request.GetConfiguration(), instance, !s.Settings.WithoutSSL)
 }
 
 func (s *Builder) Options() []*agentv0.Question {

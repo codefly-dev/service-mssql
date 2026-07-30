@@ -1,9 +1,12 @@
 resources:
   - ../../base
+{{- if not .Restricted }}
   - secret.yaml
+{{- end }}
 
-
+{{- if not .Restricted }}
 images:
   - name: image:tag
-    newName: {{.Image.Name}}
-    newTag: {{.Image.Tag}}
+    newName: {{ .Image.Name }}
+    newTag: {{ .Image.Tag }}
+{{- end }}

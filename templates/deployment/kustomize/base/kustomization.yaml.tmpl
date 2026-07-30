@@ -1,7 +1,9 @@
 resources:
+{{- if not .Restricted }}
   - namespace.yaml
+{{- end }}
   - stateful-set.yaml
   - service.yaml
-{{- if .Deployment.Parameters.WithMigration }}
+{{- if and (not .Restricted) .Deployment.Parameters.WithMigration }}
   - job.yaml
 {{- end }}
