@@ -1,4 +1,4 @@
-module github.com/codefly-dev/service-external-microsoft-sql-server
+module github.com/codefly-dev/service-mssql
 
 go 1.25.12
 

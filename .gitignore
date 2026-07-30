@@ -2,5 +2,6 @@
 .idea
 go.work*
 dist
+.codefly/
 
 dist/

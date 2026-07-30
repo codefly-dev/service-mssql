@@ -21,7 +21,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/microsoft/go-mssqldb"
 
-	"github.com/codefly-dev/service-external-microsoft-sql-server/migrations"
+	"github.com/codefly-dev/service-mssql/migrations"
 )
 
 type Runtime struct {

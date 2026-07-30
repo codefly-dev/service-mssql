@@ -3,7 +3,7 @@ version: 2
 release:
   github:
     owner: codefly-dev
-    name: service-external-microsoft-sql-server
+    name: service-mssql
 
 builds:
   - id: darwin

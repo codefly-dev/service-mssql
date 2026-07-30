@@ -1,3 +1,4 @@
 publisher: codefly.dev
-name: external-microsoft-sql-server
+kind: codefly:service
+name: mssql
 version: 0.0.13
