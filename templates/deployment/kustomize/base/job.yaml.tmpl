@@ -1,3 +1,4 @@
+{{- if not .Restricted }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -11,10 +12,44 @@ spec:
       annotations:
         sidecar.istio.io/inject: "false"
     spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: {{ .Service.Name.DNSCase }}
           image: image:tag
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            # readOnlyRootFilesystem=true prevents Python from writing bytecode
+            # next to the alembic sources baked into the image.
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
           envFrom:
             - secretRef:
                 name: secret-{{ .Service.Name.DNSCase }}
-      restartPolicy: Never
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

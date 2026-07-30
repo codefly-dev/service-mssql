@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ .Name }}
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -30,9 +31,15 @@ spec:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
             runAsUser: 10001
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+              # sqlservr ships with the cap_net_bind_service file capability;
+              # dropping ALL without re-adding it makes the kernel refuse to
+              # exec the binary (Operation not permitted).
+              add:
+                - NET_BIND_SERVICE
             seccompProfile:
               type: RuntimeDefault
           ports:
@@ -43,11 +50,20 @@ spec:
               value: "Y"
             - name: MSSQL_PID
               value: "Developer"
+{{- if not .Restricted }}
             - name: MSSQL_SA_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: secret-{{ .Name }}
                   key: MSSQL_PASSWORD
+{{- else if .Deployment.Parameters.PasswordReference }}
+            - name: MSSQL_SA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Deployment.Parameters.PasswordReference.Name }}
+                  key: {{ .Deployment.Parameters.PasswordReference.Key }}
+                  optional: false
+{{- end }}
           resources:
             requests:
               cpu: 500m
@@ -80,6 +96,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/opt/mssql
+            # readOnlyRootFilesystem=true still needs writable scratch space for
+            # SQL Server's temporary files outside the persistent data volume.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data

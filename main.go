@@ -15,6 +15,7 @@ import (
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/services"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/codefly-dev/core/resources"
 	runnersbase "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/shared"
@@ -55,6 +56,11 @@ var image = &resources.DockerImage{
 type DeploymentTemplateParameters struct {
 	WithMigration bool
 	ManagedImage  string
+
+	// PasswordReference is set only for a restricted render: an identifier-only
+	// reference to the externally managed Secret key that holds the SQL Server SA
+	// password. It never carries the secret value.
+	PasswordReference *builderv0.KubernetesSecretKeyReference
 }
 
 type Service struct {
@@ -164,6 +170,25 @@ func (s *Service) CreateConnectionConfiguration(ctx context.Context, conf *basev
 		},
 	}
 	return outputConf, nil
+}
+
+// restrictedConnectionConfiguration advertises the connection endpoint plus a
+// value-free reference to the SQL Server credentials. A restricted render never
+// receives or serializes the secret values themselves; consumers resolve the
+// connection from the externally managed Secret.
+func (s *Service) restrictedConnectionConfiguration(instance *basev0.NetworkInstance) *basev0.Configuration {
+	return &basev0.Configuration{
+		Origin:         s.Base.Unique(),
+		RuntimeContext: resources.RuntimeContextFromInstance(instance),
+		Infos: []*basev0.ConfigurationInformation{
+			{Name: "mssql",
+				ConfigurationValues: []*basev0.ConfigurationValue{
+					{Key: "endpoint", Value: instance.Address},
+					{Key: "connection", Secret: true},
+				},
+			},
+		},
+	}
 }
 
 func main() {
