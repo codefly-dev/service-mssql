@@ -35,9 +35,8 @@ jobs:
       # Docker is preinstalled on GitHub-hosted amd64 runners, where the
       # linux/amd64 SQL Server image runs natively. The heavy end-to-end
       # migration integration (TestCreateToRun) is exercised separately.
-      - name: Docker availability
-        run: |
-          docker version --format '{{.Server.Os}}/{{.Server.Arch}} server {{.Server.Version}}'
+      # -v surfaces each conformance case and confirms the Docker hardened-runtime
+      # test actually runs (rather than silently skipping) on the amd64 runner.
       - name: Conformance and hardened-runtime tests
         run: |
           go test ./... -v -skip '^TestCreateToRun$'
