@@ -36,6 +36,8 @@ jobs:
       # linux/amd64 SQL Server image runs natively. The heavy end-to-end
       # migration integration (TestCreateToRun) is exercised separately.
       - name: Docker availability
-        run: docker info --format 'docker server: {{.ServerVersion}} ({{.OSType}}/{{.Architecture}})'
+        run: |
+          docker version --format '{{.Server.Os}}/{{.Server.Arch}} server {{.Server.Version}}'
       - name: Conformance and hardened-runtime tests
-        run: go test ./... -v -skip '^TestCreateToRun$'
+        run: |
+          go test ./... -v -skip '^TestCreateToRun$'
