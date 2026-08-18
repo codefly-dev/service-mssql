@@ -24,6 +24,12 @@ import (
 	"github.com/codefly-dev/service-mssql/migrations"
 )
 
+// readyTimeout bounds how long WaitForReady polls a freshly started SQL Server.
+// A cold first boot copies the system databases and refuses clients with EOF for
+// close to a minute, so the budget sits above the 90s hardened_test.go already
+// allows the pinned image to serve.
+const readyTimeout = 120 * time.Second
+
 type Runtime struct {
 	services.RuntimeServer
 	*Service
@@ -203,9 +209,14 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		masterConn += ";connection timeout=10"
 	}
 
-	maxRetry := 10 // Increased from 5
+	// On a cold data volume MSSQL copies the system databases before it accepts
+	// clients, fast-failing connections with EOF for the better part of a minute
+	// (the pinned image is given up to 90s to serve in hardened_test.go). Wait
+	// against a wall-clock deadline rather than a fixed retry count so a slow
+	// first boot cannot exhaust the budget while the server is still coming up.
+	deadline := time.Now().Add(readyTimeout)
 	retryDelay := 3 * time.Second
-	for retry := 0; retry < maxRetry; retry++ {
+	for time.Now().Before(deadline) {
 		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
@@ -226,10 +237,7 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		cancel()
 
 		if err != nil {
-			s.Wool.Debug("ping failed",
-				wool.ErrField(err),
-				wool.Field("retry", retry+1),
-				wool.Field("max_retries", maxRetry))
+			s.Wool.Debug("ping failed", wool.ErrField(err))
 			db.Close()
 			time.Sleep(retryDelay)
 			continue
@@ -244,10 +252,7 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		db.Close()
 
 		if err != nil {
-			s.Wool.Debug("query failed",
-				wool.ErrField(err),
-				wool.Field("retry", retry+1),
-				wool.Field("max_retries", maxRetry))
+			s.Wool.Debug("query failed", wool.ErrField(err))
 			time.Sleep(retryDelay)
 			continue
 		}
@@ -256,7 +261,7 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		return nil
 	}
 
-	return s.Wool.NewError("database is not ready after maximum retries")
+	return s.Wool.NewError("database is not ready after %s", readyTimeout)
 }
 
 func (s *Runtime) createDatabaseIfNotExists(ctx context.Context) error {
