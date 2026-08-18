@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codefly-dev/core/agents/services"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
@@ -141,8 +142,9 @@ func runTestWithFormat(t *testing.T, migrationFormat string) {
 		time.Sleep(500 * time.Millisecond)
 	}()
 
-	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
+	startResp, err := runtime.Start(ctx, &runtimev0.StartRequest{})
 	require.NoError(t, err)
+	require.NoError(t, services.ValidateRuntimeStartResponse(startResp))
 
 	configurationOut, err := resources.ExtractConfiguration(init.RuntimeConfigurations, resources.NewRuntimeContextNative())
 	require.NoError(t, err)
