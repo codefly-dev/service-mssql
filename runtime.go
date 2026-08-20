@@ -24,12 +24,6 @@ import (
 	"github.com/codefly-dev/service-mssql/migrations"
 )
 
-// readyTimeout bounds how long WaitForReady polls a freshly started SQL Server.
-// A cold first boot copies the system databases and refuses clients with EOF for
-// close to a minute, so the budget sits above the 90s hardened_test.go already
-// allows the pinned image to serve.
-const readyTimeout = 120 * time.Second
-
 type Runtime struct {
 	services.RuntimeServer
 	*Service
@@ -147,11 +141,13 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	runner.WithOutput(s.Wool)
-	// Publish on all host interfaces, not just loopback (the runner's default):
-	// clients reach this database over the Docker bridge via host.docker.internal
-	// — the containerised alembic migration, and any consumer running in a
-	// container — which a loopback-only binding leaves unreachable.
-	runner.WithPublicPorts()
+	// The alembic migration runs in a sidecar container that reaches SQL Server
+	// over host.docker.internal; core's loopback-only default is unreachable
+	// from there, so the published port must bind all interfaces. gomigrate runs
+	// in-process over loopback and keeps the secure default.
+	if !s.Settings.NoMigration && s.Settings.MigrationFormat == "alembic" {
+		runner.WithPublicPorts()
+	}
 	runner.WithPortMapping(ctx, uint16(instance.Port), s.sqlServerPort)
 
 	// SQL Server environment variables
@@ -202,6 +198,15 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	return s.Runtime.InitResponse()
 }
 
+// A SQL Server container cold start routinely runs past a minute under load,
+// so the readiness budget (readinessMaxRetry * readinessRetryDelay) must clear
+// that; a shorter window makes Start give up while the server is still coming
+// up, and the driver reports the half-open connection as a bare EOF.
+const (
+	readinessMaxRetry   = 40
+	readinessRetryDelay = 3 * time.Second
+)
+
 func (s *Runtime) WaitForReady(ctx context.Context) error {
 	defer s.Wool.Catch()
 	_ = s.Wool.Inject(ctx)
@@ -214,14 +219,9 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		masterConn += ";connection timeout=10"
 	}
 
-	// On a cold data volume MSSQL copies the system databases before it accepts
-	// clients, fast-failing connections with EOF for the better part of a minute
-	// (the pinned image is given up to 90s to serve in hardened_test.go). Wait
-	// against a wall-clock deadline rather than a fixed retry count so a slow
-	// first boot cannot exhaust the budget while the server is still coming up.
-	deadline := time.Now().Add(readyTimeout)
-	retryDelay := 3 * time.Second
-	for time.Now().Before(deadline) {
+	maxRetry := readinessMaxRetry
+	retryDelay := readinessRetryDelay
+	for retry := 0; retry < maxRetry; retry++ {
 		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
@@ -242,7 +242,10 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		cancel()
 
 		if err != nil {
-			s.Wool.Debug("ping failed", wool.ErrField(err))
+			s.Wool.Debug("ping failed",
+				wool.ErrField(err),
+				wool.Field("retry", retry+1),
+				wool.Field("max_retries", maxRetry))
 			db.Close()
 			time.Sleep(retryDelay)
 			continue
@@ -257,7 +260,10 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		db.Close()
 
 		if err != nil {
-			s.Wool.Debug("query failed", wool.ErrField(err))
+			s.Wool.Debug("query failed",
+				wool.ErrField(err),
+				wool.Field("retry", retry+1),
+				wool.Field("max_retries", maxRetry))
 			time.Sleep(retryDelay)
 			continue
 		}
@@ -266,7 +272,7 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		return nil
 	}
 
-	return s.Wool.NewError("database is not ready after %s", readyTimeout)
+	return s.Wool.NewError("database is not ready after maximum retries")
 }
 
 func (s *Runtime) createDatabaseIfNotExists(ctx context.Context) error {
@@ -320,24 +326,24 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	err := s.WaitForReady(ctx)
 	if err != nil {
-		return s.Runtime.StartError(err)
+		return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 	}
 
 	// Create database if it doesn't exist
 	err = s.createDatabaseIfNotExists(ctx)
 	if err != nil {
-		return s.Runtime.StartError(err)
+		return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 	}
 
 	if !s.Settings.NoMigration && s.migrationManager != nil {
 		err = s.migrationManager.Init(ctx, s.Runtime.RuntimeConfigurations)
 		if err != nil {
-			return s.Runtime.StartError(err)
+			return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 		}
 		s.Wool.Focus("applying migrations")
 		err = s.migrationManager.Apply(ctx)
 		if err != nil {
-			return s.Runtime.StartError(err)
+			return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 		}
 		s.Wool.Focus("migrations applied")
 	}
@@ -351,6 +357,24 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 	s.Wool.Debug("start done")
 	return s.Runtime.StartResponse()
+}
+
+// withContainerLogs enriches a startup or migration failure with the SQL
+// Server container's own output. A driver-level EOF only says the server
+// closed the connection; the reason (a fatal config error, the container
+// exiting) lives in the container logs, not the Go error.
+func (s *Runtime) withContainerLogs(ctx context.Context, err error) error {
+	if s.runnerEnvironment == nil {
+		return err
+	}
+	logs := s.runnerEnvironment.TailLogs(ctx, 50)
+	if logs == "" {
+		return err
+	}
+	// Not Wool.Wrapf (the file's usual idiom): it prepends its message, which
+	// would bury the driver cause after the multi-line log block. Keep the
+	// cause first, logs after.
+	return fmt.Errorf("%w\nsql server container logs (last lines):\n%s", err, logs)
 }
 
 func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationRequest) (*runtimev0.InformationResponse, error) {
