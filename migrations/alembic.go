@@ -23,11 +23,6 @@ type Alembic struct {
 	nativeConnection    string // For use on host
 }
 
-// migrationTimeout bounds how long Apply retries the containerised upgrade while
-// SQL Server finishes its post-ready system-database upgrade and keeps refusing
-// clients.
-const migrationTimeout = 120 * time.Second
-
 var alembicImage = &resources.DockerImage{
 	Name:   "codeflydev/mssql-alembic",
 	Digest: "sha256:d0a5e79de5c88d2bdbf29db3b4b2352a7b612aa0ce29ac13574d77941381f03c",
@@ -224,30 +219,18 @@ func (a *Alembic) Apply(ctx context.Context) error {
 		// Don't return error, proceed with upgrade which will handle empty database
 	}
 
-	// Run alembic upgrade. On a cold first boot SQL Server keeps refusing clients
-	// ("Adaptive Server is unavailable") while it upgrades its system databases
-	// after first reporting ready, so the containerised upgrade can hit a
-	// transient connection failure. Retry against a deadline: applying to head is
-	// idempotent, so a repeat after a partial success is a no-op.
+	// Run alembic upgrade
 	a.w.Focus("starting migrations to latest version")
-	deadline := time.Now().Add(migrationTimeout)
-	for attempt := 1; ; attempt++ {
-		proc, err := runner.NewProcess("alembic", "-c", "/workspace/alembic.ini", "upgrade", "head")
-		if err != nil {
-			return a.w.Wrapf(err, "cannot create process")
-		}
-		proc.WithOutput(a.w)
+	proc, err := runner.NewProcess("alembic", "-c", "/workspace/alembic.ini", "upgrade", "head")
+	if err != nil {
+		return a.w.Wrapf(err, "cannot create process")
+	}
+	proc.WithOutput(a.w)
 
-		a.w.Focus("running upgrade process", wool.Field("attempt", attempt))
-		err = proc.Run(migrationCtx) // Use the detached context
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return a.w.Wrapf(err, "alembic upgrade failed after %s", migrationTimeout)
-		}
-		a.w.Debug("alembic upgrade failed, retrying", wool.ErrField(err))
-		time.Sleep(3 * time.Second)
+	a.w.Focus("running upgrade process")
+	err = proc.Run(migrationCtx) // Use the detached context
+	if err != nil {
+		return a.w.Wrapf(err, "alembic upgrade failed")
 	}
 	a.w.Focus("upgrade process completed")
 

@@ -147,6 +147,11 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	runner.WithOutput(s.Wool)
+	// Publish on all host interfaces, not just loopback (the runner's default):
+	// clients reach this database over the Docker bridge via host.docker.internal
+	// — the containerised alembic migration, and any consumer running in a
+	// container — which a loopback-only binding leaves unreachable.
+	runner.WithPublicPorts()
 	runner.WithPortMapping(ctx, uint16(instance.Port), s.sqlServerPort)
 
 	// SQL Server environment variables
