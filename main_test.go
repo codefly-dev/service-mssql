@@ -130,6 +130,7 @@ func runTestWithFormat(t *testing.T, migrationFormat string) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, init)
+	require.NotEqual(t, runtimev0.InitStatus_ERROR, init.GetStatus().GetState(), "init failed: %s", init.GetStatus().GetMessage())
 
 	// Ensure cleanup happens even if test fails
 	defer func() {
@@ -141,8 +142,9 @@ func runTestWithFormat(t *testing.T, migrationFormat string) {
 		time.Sleep(500 * time.Millisecond)
 	}()
 
-	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
+	start, err := runtime.Start(ctx, &runtimev0.StartRequest{})
 	require.NoError(t, err)
+	require.NotEqual(t, runtimev0.StartStatus_ERROR, start.GetStatus().GetState(), "start failed: %s", start.GetStatus().GetMessage())
 
 	configurationOut, err := resources.ExtractConfiguration(init.RuntimeConfigurations, resources.NewRuntimeContextNative())
 	require.NoError(t, err)

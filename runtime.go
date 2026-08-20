@@ -310,24 +310,24 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	err := s.WaitForReady(ctx)
 	if err != nil {
-		return s.Runtime.StartError(err)
+		return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 	}
 
 	// Create database if it doesn't exist
 	err = s.createDatabaseIfNotExists(ctx)
 	if err != nil {
-		return s.Runtime.StartError(err)
+		return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 	}
 
 	if !s.Settings.NoMigration && s.migrationManager != nil {
 		err = s.migrationManager.Init(ctx, s.Runtime.RuntimeConfigurations)
 		if err != nil {
-			return s.Runtime.StartError(err)
+			return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 		}
 		s.Wool.Focus("applying migrations")
 		err = s.migrationManager.Apply(ctx)
 		if err != nil {
-			return s.Runtime.StartError(err)
+			return s.Runtime.StartError(s.withContainerLogs(ctx, err))
 		}
 		s.Wool.Focus("migrations applied")
 	}
@@ -341,6 +341,21 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 	s.Wool.Debug("start done")
 	return s.Runtime.StartResponse()
+}
+
+// withContainerLogs enriches a startup or migration failure with the SQL
+// Server container's own output. A driver-level EOF only says the server
+// closed the connection; the reason (a fatal config error, the container
+// exiting) lives in the container logs, not the Go error.
+func (s *Runtime) withContainerLogs(ctx context.Context, err error) error {
+	if s.runnerEnvironment == nil {
+		return err
+	}
+	logs := s.runnerEnvironment.TailLogs(ctx, 50)
+	if logs == "" {
+		return err
+	}
+	return fmt.Errorf("%w\nsql server container logs (last lines):\n%s", err, logs)
 }
 
 func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationRequest) (*runtimev0.InformationResponse, error) {
