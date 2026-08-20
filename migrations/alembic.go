@@ -278,7 +278,7 @@ func (a *Alembic) Apply(ctx context.Context) error {
 
 			// Check for alembic_version table to see if migrations ran but didn't create tables
 			var hasAlembicVersion bool
-			vErr := finalDb.QueryRow(`
+			vErr := finalDb.QueryRowContext(ctx, `
 				SELECT CASE WHEN EXISTS (
 					SELECT * FROM INFORMATION_SCHEMA.TABLES
 					WHERE TABLE_SCHEMA = 'dbo'
@@ -289,7 +289,7 @@ func (a *Alembic) Apply(ctx context.Context) error {
 			if vErr == nil && hasAlembicVersion {
 				// Check version records to provide better error information
 				var versions []string
-				vRows, vRowErr := finalDb.Query("SELECT version_num FROM alembic_version")
+				vRows, vRowErr := finalDb.QueryContext(ctx, "SELECT version_num FROM alembic_version")
 				if vRowErr == nil {
 					defer vRows.Close()
 					for vRows.Next() {
@@ -342,13 +342,8 @@ func (a *Alembic) waitForApplicationTables(ctx context.Context, db *sql.DB, maxR
 		// Run the query in its own function scope so the result set is released
 		// at the end of the iteration rather than accumulating until we return.
 		found, qErr := func() ([]string, error) {
-			// Test the connection
-			if pingErr := db.PingContext(ctx); pingErr != nil {
-				a.w.Debug("database ping failed", wool.Field("attempt", i+1), wool.ErrField(pingErr))
-				return nil, pingErr
-			}
-
-			// List all tables including version tables
+			// List all tables including version tables. QueryContext establishes
+			// and validates the connection itself, so no separate ping is needed.
 			query := `
 				SELECT TABLE_NAME
 				FROM INFORMATION_SCHEMA.TABLES
@@ -378,6 +373,14 @@ func (a *Alembic) waitForApplicationTables(ctx context.Context, db *sql.DB, maxR
 			return found, nil
 		}()
 		if qErr != nil {
+			// A cancelled or timed-out context surfaces here as the query error;
+			// report it as cancellation rather than retrying — and rather than
+			// losing it entirely when this is the final attempt (where there is
+			// no subsequent ctx.Done() wait to catch it).
+			if ctx.Err() != nil {
+				return nil, lastErr, ctx.Err()
+			}
+			a.w.Debug("table check attempt failed", wool.Field("attempt", i+1), wool.ErrField(qErr))
 			lastErr = qErr
 			continue
 		}
