@@ -276,9 +276,16 @@ func (a *Alembic) Apply(ctx context.Context) error {
 		} else {
 			defer finalDb.Close()
 
+			// This is a best-effort diagnostic to enrich the error we are about
+			// to return. Give it a short, independent deadline so it still runs
+			// (and stays informative) even when the caller's context has already
+			// been cancelled, while never blocking indefinitely on a wedged server.
+			diagCtx, cancelDiag := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelDiag()
+
 			// Check for alembic_version table to see if migrations ran but didn't create tables
 			var hasAlembicVersion bool
-			vErr := finalDb.QueryRowContext(ctx, `
+			vErr := finalDb.QueryRowContext(diagCtx, `
 				SELECT CASE WHEN EXISTS (
 					SELECT * FROM INFORMATION_SCHEMA.TABLES
 					WHERE TABLE_SCHEMA = 'dbo'
@@ -289,7 +296,7 @@ func (a *Alembic) Apply(ctx context.Context) error {
 			if vErr == nil && hasAlembicVersion {
 				// Check version records to provide better error information
 				var versions []string
-				vRows, vRowErr := finalDb.QueryContext(ctx, "SELECT version_num FROM alembic_version")
+				vRows, vRowErr := finalDb.QueryContext(diagCtx, "SELECT version_num FROM alembic_version")
 				if vRowErr == nil {
 					defer vRows.Close()
 					for vRows.Next() {
@@ -376,8 +383,10 @@ func (a *Alembic) waitForApplicationTables(ctx context.Context, db *sql.DB, maxR
 			// A cancelled or timed-out context surfaces here as the query error;
 			// report it as cancellation rather than retrying — and rather than
 			// losing it entirely when this is the final attempt (where there is
-			// no subsequent ctx.Done() wait to catch it).
+			// no subsequent ctx.Done() wait to catch it). Log qErr first so a
+			// connection error that raced the cancellation is not lost.
 			if ctx.Err() != nil {
+				a.w.Debug("table check cancelled", wool.Field("attempt", i+1), wool.ErrField(qErr))
 				return nil, lastErr, ctx.Err()
 			}
 			a.w.Debug("table check attempt failed", wool.Field("attempt", i+1), wool.ErrField(qErr))
