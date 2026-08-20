@@ -3,7 +3,7 @@ module github.com/codefly-dev/service-mssql
 go 1.26
 
 require (
-	github.com/codefly-dev/core v0.3.3
+	github.com/codefly-dev/core v0.3.4
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/stretchr/testify v1.11.1
