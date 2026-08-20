@@ -141,6 +141,13 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	runner.WithOutput(s.Wool)
+	// The alembic migration runs in a sidecar container that reaches SQL Server
+	// over host.docker.internal; core's loopback-only default is unreachable
+	// from there, so the published port must bind all interfaces. gomigrate runs
+	// in-process over loopback and keeps the secure default.
+	if !s.Settings.NoMigration && s.Settings.MigrationFormat == "alembic" {
+		runner.WithPublicPorts()
+	}
 	runner.WithPortMapping(ctx, uint16(instance.Port), s.sqlServerPort)
 
 	// SQL Server environment variables
