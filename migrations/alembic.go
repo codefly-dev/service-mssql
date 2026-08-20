@@ -263,51 +263,60 @@ func (a *Alembic) Apply(ctx context.Context) error {
 		a.w.Debug("checking database for tables", wool.Field("attempt", i+1),
 			wool.Field("elapsed_time", time.Duration(i)*retryDelay),
 			wool.Field("timeout", time.Duration(maxRetries)*retryDelay))
-		db, err := sql.Open("sqlserver", a.nativeConnection)
-		if err != nil {
-			a.w.Debug("failed to open database connection", wool.Field("attempt", i+1), wool.ErrField(err))
-			lastErr = err
-			continue
-		}
-		defer db.Close()
 
-		// Test the connection
-		err = db.Ping()
-		if err != nil {
-			a.w.Debug("database ping failed", wool.Field("attempt", i+1), wool.ErrField(err))
-			lastErr = err
-			continue
-		}
-
-		// List all tables including version tables
-		query := `
-			SELECT TABLE_NAME
-			FROM INFORMATION_SCHEMA.TABLES
-			WHERE TABLE_TYPE = 'BASE TABLE'
-			AND TABLE_SCHEMA = 'dbo'
-			AND TABLE_NAME NOT LIKE 'sys%'
-			AND TABLE_NAME != 'alembic_version'
-		`
-		rows, err := db.Query(query)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		defer rows.Close()
-
-		tables = nil
-		for rows.Next() {
-			var table string
-			if err := rows.Scan(&table); err != nil {
-				lastErr = err
-				continue
+		// Run each attempt in its own function scope so the connection pool and
+		// result set are released at the end of the iteration. Deferring their
+		// Close directly in the loop would keep every failed attempt's pool open
+		// until Apply returns — up to maxRetries pools over the whole ~120s window.
+		found, err := func() ([]string, error) {
+			db, err := sql.Open("sqlserver", a.nativeConnection)
+			if err != nil {
+				a.w.Debug("failed to open database connection", wool.Field("attempt", i+1), wool.ErrField(err))
+				return nil, err
 			}
-			tables = append(tables, table)
-		}
-		if rows.Err() != nil {
-			lastErr = rows.Err()
+			defer db.Close()
+
+			// Test the connection
+			if err = db.Ping(); err != nil {
+				a.w.Debug("database ping failed", wool.Field("attempt", i+1), wool.ErrField(err))
+				return nil, err
+			}
+
+			// List all tables including version tables
+			query := `
+				SELECT TABLE_NAME
+				FROM INFORMATION_SCHEMA.TABLES
+				WHERE TABLE_TYPE = 'BASE TABLE'
+				AND TABLE_SCHEMA = 'dbo'
+				AND TABLE_NAME NOT LIKE 'sys%'
+				AND TABLE_NAME != 'alembic_version'
+			`
+			rows, err := db.Query(query)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+
+			var found []string
+			for rows.Next() {
+				var table string
+				if err := rows.Scan(&table); err != nil {
+					lastErr = err
+					continue
+				}
+				found = append(found, table)
+			}
+			if rows.Err() != nil {
+				lastErr = rows.Err()
+			}
+			return found, nil
+		}()
+		if err != nil {
+			lastErr = err
+			continue
 		}
 
+		tables = found
 		if len(tables) > 0 {
 			break
 		}
