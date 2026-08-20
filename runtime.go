@@ -191,6 +191,15 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	return s.Runtime.InitResponse()
 }
 
+// A SQL Server container cold start routinely runs past a minute under load,
+// so the readiness budget (readinessMaxRetry * readinessRetryDelay) must clear
+// that; a shorter window makes Start give up while the server is still coming
+// up, and the driver reports the half-open connection as a bare EOF.
+const (
+	readinessMaxRetry   = 40
+	readinessRetryDelay = 3 * time.Second
+)
+
 func (s *Runtime) WaitForReady(ctx context.Context) error {
 	defer s.Wool.Catch()
 	_ = s.Wool.Inject(ctx)
@@ -203,8 +212,8 @@ func (s *Runtime) WaitForReady(ctx context.Context) error {
 		masterConn += ";connection timeout=10"
 	}
 
-	maxRetry := 10 // Increased from 5
-	retryDelay := 3 * time.Second
+	maxRetry := readinessMaxRetry
+	retryDelay := readinessRetryDelay
 	for retry := 0; retry < maxRetry; retry++ {
 		// Check if context is cancelled
 		select {
@@ -355,6 +364,9 @@ func (s *Runtime) withContainerLogs(ctx context.Context, err error) error {
 	if logs == "" {
 		return err
 	}
+	// Not Wool.Wrapf (the file's usual idiom): it prepends its message, which
+	// would bury the driver cause after the multi-line log block. Keep the
+	// cause first, logs after.
 	return fmt.Errorf("%w\nsql server container logs (last lines):\n%s", err, logs)
 }
 

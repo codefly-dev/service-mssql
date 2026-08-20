@@ -22,6 +22,12 @@ import (
 // TODO: Add tests
 // - migrations: up/down
 
+func TestReadinessBudgetCoversColdStart(t *testing.T) {
+	budget := time.Duration(readinessMaxRetry) * readinessRetryDelay
+	require.GreaterOrEqual(t, budget, 90*time.Second,
+		"readiness budget must exceed SQL Server container cold-start time")
+}
+
 func TestCreateToRun(t *testing.T) {
 	// Run tests sequentially to avoid port conflicts
 	t.Run("gomigrate", func(t *testing.T) {
