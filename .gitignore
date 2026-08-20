@@ -5,3 +5,5 @@ dist
 .codefly/
 
 dist/
+# Built agent binary (rebuilt by `codefly agent build`).
+service-mssql
