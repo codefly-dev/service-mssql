@@ -251,75 +251,19 @@ func (a *Alembic) Apply(ctx context.Context) error {
 	// Check tables using native connection with retries for up to 1 minute
 	maxRetries := 12 // Try 12 times with 10-second intervals = 120 seconds total
 	retryDelay := time.Second * 10
-	var tables []string
-	var lastErr error
 
-	for i := 0; i < maxRetries; i++ {
-		if i > 0 {
-			a.w.Debug("retrying table check", wool.Field("attempt", i+1), wool.Field("max_retries", maxRetries))
-			time.Sleep(retryDelay)
-		}
+	// Open a single connection pool for all attempts. sql.Open is lazy and the
+	// pool transparently reopens dropped connections, so there is no need to
+	// rebuild it on every retry — one pool, closed once when Apply returns.
+	db, err := sql.Open("sqlserver", a.nativeConnection)
+	if err != nil {
+		return a.w.Wrapf(err, "cannot open database connection")
+	}
+	defer db.Close()
 
-		a.w.Debug("checking database for tables", wool.Field("attempt", i+1),
-			wool.Field("elapsed_time", time.Duration(i)*retryDelay),
-			wool.Field("timeout", time.Duration(maxRetries)*retryDelay))
-
-		// Run each attempt in its own function scope so the connection pool and
-		// result set are released at the end of the iteration. Deferring their
-		// Close directly in the loop would keep every failed attempt's pool open
-		// until Apply returns — up to maxRetries pools over the whole ~120s window.
-		found, err := func() ([]string, error) {
-			db, err := sql.Open("sqlserver", a.nativeConnection)
-			if err != nil {
-				a.w.Debug("failed to open database connection", wool.Field("attempt", i+1), wool.ErrField(err))
-				return nil, err
-			}
-			defer db.Close()
-
-			// Test the connection
-			if err = db.Ping(); err != nil {
-				a.w.Debug("database ping failed", wool.Field("attempt", i+1), wool.ErrField(err))
-				return nil, err
-			}
-
-			// List all tables including version tables
-			query := `
-				SELECT TABLE_NAME
-				FROM INFORMATION_SCHEMA.TABLES
-				WHERE TABLE_TYPE = 'BASE TABLE'
-				AND TABLE_SCHEMA = 'dbo'
-				AND TABLE_NAME NOT LIKE 'sys%'
-				AND TABLE_NAME != 'alembic_version'
-			`
-			rows, err := db.Query(query)
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-
-			var found []string
-			for rows.Next() {
-				var table string
-				if err := rows.Scan(&table); err != nil {
-					lastErr = err
-					continue
-				}
-				found = append(found, table)
-			}
-			if rows.Err() != nil {
-				lastErr = rows.Err()
-			}
-			return found, nil
-		}()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		tables = found
-		if len(tables) > 0 {
-			break
-		}
+	tables, lastErr, err := a.waitForApplicationTables(ctx, db, maxRetries, retryDelay)
+	if err != nil {
+		return a.w.Wrapf(err, "cancelled while waiting for migration tables")
 	}
 
 	// Log tables but don't fail if empty
@@ -370,6 +314,80 @@ func (a *Alembic) Apply(ctx context.Context) error {
 		return a.w.Wrap(fmt.Errorf("no tables found in database after waiting %s (%d attempts): migrations failed or are taking too long to commit", time.Duration(maxRetries)*retryDelay, maxRetries))
 	}
 	return nil
+}
+
+// waitForApplicationTables polls for the application tables the migration is
+// expected to create (everything under dbo except alembic_version), retrying
+// while a freshly-migrated database finishes committing them. It returns the
+// tables found and the last non-fatal error seen (used to explain an empty
+// result). The returned error is non-nil only when ctx is cancelled, so the
+// poll stops promptly instead of sleeping out the whole retry window.
+func (a *Alembic) waitForApplicationTables(ctx context.Context, db *sql.DB, maxRetries int, retryDelay time.Duration) (tables []string, lastErr error, err error) {
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			a.w.Debug("retrying table check", wool.Field("attempt", i+1), wool.Field("max_retries", maxRetries))
+			// Wait between attempts, but return promptly if the caller cancels
+			// instead of sleeping out the remainder of the ~120s window.
+			select {
+			case <-ctx.Done():
+				return nil, lastErr, ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+
+		a.w.Debug("checking database for tables", wool.Field("attempt", i+1),
+			wool.Field("elapsed_time", time.Duration(i)*retryDelay),
+			wool.Field("timeout", time.Duration(maxRetries)*retryDelay))
+
+		// Run the query in its own function scope so the result set is released
+		// at the end of the iteration rather than accumulating until we return.
+		found, qErr := func() ([]string, error) {
+			// Test the connection
+			if pingErr := db.PingContext(ctx); pingErr != nil {
+				a.w.Debug("database ping failed", wool.Field("attempt", i+1), wool.ErrField(pingErr))
+				return nil, pingErr
+			}
+
+			// List all tables including version tables
+			query := `
+				SELECT TABLE_NAME
+				FROM INFORMATION_SCHEMA.TABLES
+				WHERE TABLE_TYPE = 'BASE TABLE'
+				AND TABLE_SCHEMA = 'dbo'
+				AND TABLE_NAME NOT LIKE 'sys%'
+				AND TABLE_NAME != 'alembic_version'
+			`
+			rows, queryErr := db.QueryContext(ctx, query)
+			if queryErr != nil {
+				return nil, queryErr
+			}
+			defer rows.Close()
+
+			var found []string
+			for rows.Next() {
+				var table string
+				if scanErr := rows.Scan(&table); scanErr != nil {
+					lastErr = scanErr
+					continue
+				}
+				found = append(found, table)
+			}
+			if rows.Err() != nil {
+				lastErr = rows.Err()
+			}
+			return found, nil
+		}()
+		if qErr != nil {
+			lastErr = qErr
+			continue
+		}
+
+		tables = found
+		if len(tables) > 0 {
+			break
+		}
+	}
+	return tables, lastErr, nil
 }
 
 func (a *Alembic) Update(ctx context.Context, migrationFile string) error {
