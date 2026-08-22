@@ -1,6 +1,6 @@
 module github.com/codefly-dev/service-mssql
 
-go 1.26
+go 1.27.0
 
 require (
 	github.com/codefly-dev/core v0.3.4
