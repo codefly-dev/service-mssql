@@ -6,8 +6,30 @@ on:
       - 'v*'
 
 jobs:
-  release:
-    uses: codefly-dev/core/.github/workflows/go-service-release.yml@main
+  test:
+    permissions:
+      contents: read
+    uses: codefly-dev/core/.github/workflows/go-service-ci.yml@29bc3dbdda86cc5b3432f17c249bc49301a2edad
     with:
       setup-run: docker pull codeflydev/mssql-alembic:latest
-    secrets: inherit
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Publish with this repository's workflow token
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
