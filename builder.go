@@ -235,11 +235,11 @@ func (s *Builder) Options() []*agentv0.Question {
 			Message:     "Name of the database?",
 			Description: "Ensure encapsulation of your data",
 		}, s.Base.Identity.Module),
-		communicate.NewChoice(&agentv0.Message{
+		communicate.NewChoiceWithDefault(&agentv0.Message{
 			Name:        MigrationFormat,
 			Message:     "Choose migration format",
 			Description: "Select the database migration tool you prefer",
-		},
+		}, "gomigrate",
 			&agentv0.Message{
 				Name:        "gomigrate",
 				Message:     "Golang Migrate",
